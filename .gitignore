@@ -1,0 +1,13 @@
+# secrets
+.env
+
+# collected data (too large for git; submit a sample/archive separately)
+data/
+*.log
+
+# python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/

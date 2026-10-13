@@ -1,0 +1,75 @@
+# Runs the NTA GTFS-R collector on GitHub's servers, around the clock.
+#
+# How it stays (almost) continuous:
+#   - A run is scheduled every 3 hours (UTC).
+#   - Each run collects until 15 minutes past the next 3-hour mark.
+#   - The concurrency group makes the next scheduled run wait in the queue until
+#     the current one finishes, so it starts straight away with only a ~1-2
+#     minute gap for setup, and two collectors never run at once (which would
+#     trip the NTA rate limit).
+#
+# Each run's data is uploaded as an artifact named nta-data-<run id>, kept for
+# 90 days. Download them with download_data.py.
+#
+# Needs a repository secret called NTA_API_KEY (Settings > Secrets and
+# variables > Actions).
+
+name: Collect NTA GTFS-R data
+
+on:
+  schedule:
+    - cron: "3 */3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: nta-collector
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Work out how long to collect
+        id: dur
+        run: |
+          python - <<'EOF' >> "$GITHUB_OUTPUT"
+          import time
+          now = time.time()
+          block = 3 * 3600                      # schedule interval
+          next_mark = (now // block + 1) * block
+          secs = int(next_mark - now) + 15 * 60 # overlap into the next slot
+          secs = max(10 * 60, min(secs, 345 * 60))
+          print(f"seconds={secs}")
+          EOF
+
+      - name: Collect
+        env:
+          NTA_API_KEY: ${{ secrets.NTA_API_KEY }}
+        run: python collector.py --duration ${{ steps.dur.outputs.seconds }}
+
+      - name: Upload data
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: nta-data-${{ github.run_id }}
+          path: |
+            data/
+            collector.log
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: warn
