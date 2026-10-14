@@ -1,0 +1,35 @@
+# Safety net for collect.yml. Every half hour (whenever GitHub gets round to
+# it), checks that a collector run is either running or queued. If neither,
+# the self-chaining has broken, so it starts a new collector run.
+
+name: Collector watchdog
+
+on:
+  schedule:
+    - cron: "17,47 * * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restart the collector if it is not running
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          active=0
+          for s in in_progress queued pending waiting requested; do
+            n=$(gh run list -R "$GITHUB_REPOSITORY" --workflow collect.yml \
+                  --status "$s" --json databaseId --jq 'length')
+            active=$((active + n))
+          done
+          if [ "$active" -gt 0 ]; then
+            echo "Collector is running or queued ($active run(s)). Nothing to do."
+          else
+            echo "::warning::No collector run active - starting one."
+            gh workflow run collect.yml -R "$GITHUB_REPOSITORY" --ref main
+          fi
